@@ -1,0 +1,340 @@
+openapi: 3.0.0
+info:
+  title: Information Exchange Service
+  description: |
+    API для обмена информацией об угрозах.
+
+    Если на сервере задан `API_KEY`, все методы (кроме `/healthz`) требуют
+    заголовок `X-API-Key`. Если ключ не задан, авторизация отключена.
+  version: 1.0.0
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /healthz:
+    get:
+      summary: Проверка живости сервиса
+      description: Не требует авторизации и не ограничивается rate-limit. Нужен для Docker и мониторинга.
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Сервис работает
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ok"
+
+  /info/{md5}:
+    get:
+      summary: Получить информацию об угрозе по MD5
+      description: Возвращает полную информацию об угрозе для указанного MD5-хеша.
+      operationId: getInfoByMd5
+      parameters:
+        - name: md5
+          in: path
+          required: true
+          description: MD5-хеш файла (32 символа, шестнадцатеричные цифры)
+          schema:
+            type: string
+            pattern: '^[a-fA-F0-9]{32}$'
+            example: "d41d8cd98f00b204e9800998ecf8427e"
+      responses:
+        '200':
+          description: Успешный ответ с информацией об угрозе
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatResponse'
+        '404':
+          description: Угроза с указанным MD5 не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Некорректный формат MD5
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      summary: Обновить информацию об угрозе по MD5
+      description: |
+        Полностью заменяет информацию о существующей угрозе.
+        Необязательные поля, которые не переданы в запросе, будут очищены.
+        MD5 и `created_at` не меняются, `updated_at` обновляется сервером.
+      operationId: updateThreat
+      parameters:
+        - name: md5
+          in: path
+          required: true
+          description: MD5-хеш обновляемой записи
+          schema:
+            type: string
+            pattern: '^[a-fA-F0-9]{32}$'
+            example: "d41d8cd98f00b204e9800998ecf8427e"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThreatUpdateRequest'
+      responses:
+        '200':
+          description: Информация успешно обновлена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatResponse'
+        '400':
+          description: Некорректные данные запроса или MD5
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Угроза с указанным MD5 не найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /info:
+    post:
+      summary: Создать новую запись об угрозе
+      description: Добавляет новую информацию об угрозе. MD5 должен быть уникальным.
+      operationId: createThreat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThreatCreateRequest'
+      responses:
+        '201':
+          description: Запись успешно создана
+          headers:
+            Location:
+              description: Адрес созданной записи
+              schema:
+                type: string
+                example: "/info/d41d8cd98f00b204e9800998ecf8427e"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThreatResponse'
+        '400':
+          description: Некорректные данные запроса (например, невалидный MD5)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Угроза с таким MD5 уже существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          description: Внутренняя ошибка сервера
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  responses:
+    Unauthorized:
+      description: Не передан или неверный API-ключ
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Превышен лимит запросов, повторите позже (см. заголовок Retry-After)
+      headers:
+        Retry-After:
+          description: Через сколько секунд можно повторить запрос
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ThreatType:
+      type: string
+      description: Тип (семейство) угрозы
+      enum: [trojan, ransomware, worm, virus, backdoor, spyware, adware, miner, other]
+      example: "trojan"
+
+    Severity:
+      type: string
+      description: Уровень опасности
+      enum: [low, medium, high, critical]
+      example: "high"
+
+    ThreatCreateRequest:
+      type: object
+      required:
+        - md5
+        - name
+      properties:
+        md5:
+          type: string
+          pattern: '^[a-fA-F0-9]{32}$'
+          description: MD5-хеш файла (32 шестнадцатеричных символа). Хранится в нижнем регистре.
+          example: "d41d8cd98f00b204e9800998ecf8427e"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Название угрозы
+          example: "Trojan.Win32.Generic"
+        sha256:
+          type: string
+          pattern: '^[a-fA-F0-9]{64}$'
+          description: SHA-256 того же файла (необязательно)
+          example: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        type:
+          $ref: '#/components/schemas/ThreatType'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        file_size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Размер файла в байтах
+          example: 48213
+        description:
+          type: string
+          maxLength: 2000
+          description: Произвольное описание угрозы
+          example: "Загружает дополнительные модули с удалённого сервера"
+
+    ThreatUpdateRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Название угрозы
+          example: "Trojan.Win32.Generic"
+        sha256:
+          type: string
+          pattern: '^[a-fA-F0-9]{64}$'
+          description: SHA-256 того же файла (необязательно)
+          example: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        type:
+          $ref: '#/components/schemas/ThreatType'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        file_size:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Размер файла в байтах
+          example: 48213
+        description:
+          type: string
+          maxLength: 2000
+          description: Произвольное описание угрозы
+          example: "Загружает дополнительные модули с удалённого сервера"
+
+    ThreatResponse:
+      type: object
+      required:
+        - md5
+        - name
+        - created_at
+        - updated_at
+      properties:
+        md5:
+          type: string
+          pattern: '^[a-f0-9]{32}$'
+          description: MD5-хеш (всегда в нижнем регистре)
+          example: "d41d8cd98f00b204e9800998ecf8427e"
+        name:
+          type: string
+          description: Название угрозы
+          example: "Trojan.Win32.Generic"
+        sha256:
+          type: string
+          description: SHA-256 файла (если был указан)
+          example: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        type:
+          $ref: '#/components/schemas/ThreatType'
+        severity:
+          $ref: '#/components/schemas/Severity'
+        file_size:
+          type: integer
+          format: int64
+          description: Размер файла в байтах
+          example: 48213
+        description:
+          type: string
+          description: Описание угрозы
+          example: "Загружает дополнительные модули с удалённого сервера"
+        created_at:
+          type: string
+          format: date-time
+          description: Когда запись создана (выставляет сервер)
+          example: "2026-11-07T10:15:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Когда запись последний раз менялась (выставляет сервер)
+          example: "2026-11-07T10:15:00Z"
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Человекочитаемое описание ошибки
+          example: "Threat not found"
+        details:
+          type: string
+          description: Дополнительная информация
+          example: "No threat with MD5 d41d8cd98f00b204e9800998ecf8427e found"
